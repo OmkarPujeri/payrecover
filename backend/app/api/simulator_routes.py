@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.diagnostic_agent import diagnose_event
+from app.agent.strategy_agent import recover_event
 from app.database import get_session
 from app.ingest import event_to_dict, ingest_failure
 from app.sse import sse_manager
@@ -142,6 +143,7 @@ class InjectRequest(BaseModel):
     method: str | None = Field(default=None, description="card|upi|netbanking|wallet; random if omitted")
     count: int = Field(default=1, ge=1, le=200)
     diagnose: bool = Field(default=True, description="Run the Diagnostic Agent (LLM #1) on each injected failure")
+    recover: bool = Field(default=True, description="Run the Strategy Agent (LLM #2) + Compliance Engine on each diagnosed failure")
 
 
 @router.post("/inject")
@@ -158,6 +160,7 @@ async def inject_failure(
         payload["failure_type"] = ftype
         await sse_manager.broadcast({"type": "failure_detected", "event": payload})
 
+        diagnosis = None
         if body.diagnose:
             diagnosis = await diagnose_event(session, event)
             payload = event_to_dict(event)
@@ -167,12 +170,63 @@ async def inject_failure(
                 {"type": "event_diagnosed", "event": payload, "diagnosis": diagnosis}
             )
 
+        if body.recover and diagnosis is not None:
+            decision = await recover_event(session, event, diagnosis=diagnosis)
+
+            # Stage 2a — the Strategy Agent's chosen action.
+            await sse_manager.broadcast(
+                {
+                    "type": "strategy_selected",
+                    "event_id": decision["recovery_event_id"],
+                    "strategy": {
+                        "tool": decision["tool"],
+                        "reason": decision["reason"],
+                        "confidence": decision["confidence"],
+                        "source": decision["source"],
+                        "risk_factors": decision["risk_factors"],
+                        "uncertainty_factors": decision["uncertainty_factors"],
+                    },
+                }
+            )
+            # Stage 2b — the deterministic Compliance Engine's verdict.
+            await sse_manager.broadcast(
+                {
+                    "type": "compliance_checked",
+                    "event_id": decision["recovery_event_id"],
+                    "compliance": decision["compliance"],
+                }
+            )
+            # Stage 2c — the confidence/HITL gate's routing + final status.
+            payload = event_to_dict(event)
+            payload["failure_type"] = ftype
+            payload["diagnosis_source"] = diagnosis["source"]
+            payload["recovery"] = {
+                "tool": decision["tool"],
+                "status": decision["status"],
+                "confidence": decision["confidence"],
+                "compliance_decision": decision["compliance"]["decision"],
+                "gate_action": decision["gate"]["action"],
+                "requires_human": decision["gate"]["requires_human"],
+                "source": decision["source"],
+            }
+            await sse_manager.broadcast(
+                {
+                    "type": "gate_decided",
+                    "event": payload,
+                    "gate": decision["gate"],
+                    "status": decision["status"],
+                    "scheduled_at": decision["scheduled_at"],
+                    "action_id": decision["action_id"],
+                }
+            )
+
         created_events.append(payload)
 
     return {
         "status": "ok",
         "injected": len(created_events),
         "diagnosed": body.diagnose,
+        "recovered": body.recover,
         "events": created_events,
     }
 
