@@ -1,0 +1,1 @@
+"""PayRecover backend application package."""
