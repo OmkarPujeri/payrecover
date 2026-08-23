@@ -40,6 +40,10 @@ class Settings(BaseSettings):
 
     # ---- Groq (optional) ----
     groq_api_key: str | None = None
+    # Free-tier chat model (see console.groq.com/docs/rate-limits). Swappable via
+    # the GROQ_MODEL env var without a code change; llama-3.3-70b-versatile was
+    # decommissioned, so it defaults to a current free-plan model.
+    groq_model: str = "openai/gpt-oss-120b"
 
     # ---- Toggles ----
     force_simulation: bool = False
