@@ -113,7 +113,7 @@ async def test_inject_diagnoses_event(client):
 async def test_diagnosis_persists_and_records_action(client):
     r = await client.post(
         "/api/simulator/inject",
-        json={"failure_type": "risk_flagged", "amount": 500000},
+        json={"failure_type": "risk_flagged", "amount": 500000, "recover": False},
     )
     event_id = r.json()["events"][0]["id"]
 
