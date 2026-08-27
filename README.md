@@ -12,7 +12,7 @@ Detects failed Razorpay payments, diagnoses the root cause with an LLM, picks a 
 ![FastAPI](https://img.shields.io/badge/FastAPI-async-009688?logo=fastapi&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)
 ![Groq](https://img.shields.io/badge/LLM-Groq%20gpt--oss--120b-F55036)
-![Tests](https://img.shields.io/badge/tests-106%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-139%20passing-brightgreen)
 ![Status](https://img.shields.io/badge/status-autonomous%20loop%20complete-blue)
 
 </div>
@@ -214,6 +214,17 @@ curl "http://localhost:8000/api/audit/export?format=csv" -o audit.csv
 # Aggregate metrics (₹ recovered, recovery rate, breakdowns):
 curl http://localhost:8000/api/dashboard/metrics
 
+# 6. Or run steps 1-4 as one scenario. Same primitives, same gate — a preset cannot
+#    reach past the compliance engine or produce an outcome /inject could not:
+curl http://localhost:8000/api/simulator/presets
+curl -X POST http://localhost:8000/api/simulator/chaos/hdfc_bank_crash
+#    -> 5 injected, clock +12h, retries fire, 3 customers pay, CB-001 trips 3x,
+#       plus a step-by-step receipt and the dashboard's own metrics attached
+
+# 7. Then ask what it was worth. Both read the same two totals, so they cannot disagree:
+curl http://localhost:8000/api/dashboard/economics          # ROI per failure channel
+curl http://localhost:8000/api/dashboard/metrics/comparison # vs. modelled manual recovery
+
 # Watch the live event stream (leave running, then inject in another terminal):
 curl -N http://localhost:8000/api/stream
 ```
@@ -301,7 +312,9 @@ The default model is `openai/gpt-oss-120b`, which is on Groq's **free plan** (30
 | GET    | `/health`                     | The above plus `scheduler_running` and live SSE connection count   |
 | GET    | `/api/stream`                 | SSE stream of live recovery activity                               |
 | POST   | `/webhooks/razorpay`          | Webhook receiver (HMAC, dedup, agent pipeline, breakers, SSE)      |
-| GET    | `/api/dashboard/metrics`      | ₹ recovered, recovery rate, status & failure breakdowns            |
+| GET    | `/api/dashboard/metrics`      | ₹ recovered, recovery rate, avg hours to recovery, status & failure breakdowns |
+| GET    | `/api/dashboard/economics`    | ROI per failure channel — which recovery routes pay for themselves, and which brought money back at zero marginal cost |
+| GET    | `/api/dashboard/metrics/comparison` | The same batch with the agent vs. modelled manual recovery at the 12% industry baseline |
 | GET    | `/api/dashboard/events`       | Paginated recovery events (filter by `status`)                     |
 | GET    | `/api/dashboard/events/{id}`  | Single event + its agent actions + circuit-breaker events          |
 
@@ -338,6 +351,9 @@ The default model is `openai/gpt-oss-120b`, which is on Groq's **free plan** (30
 | Method | Path                              | Description                                                    |
 | ------ | --------------------------------- | -------------------------------------------------------------- |
 | POST   | `/api/simulator/inject`           | Inject 1–200 synthetic failures and run the full pipeline      |
+| POST   | `/api/simulator/run-batch`        | Inject a weighted batch and return the *aggregate* outcome — counts by failure type, gate tier, status and tool, plus metrics and economics |
+| GET    | `/api/simulator/presets`          | The chaos scenarios, as data — drives the dashboard's button row |
+| POST   | `/api/simulator/chaos/{preset}`   | Run one scenario end to end and return a receipt of every step |
 | POST   | `/api/simulator/run-due-actions`  | Fire due scheduled work on command — the demo's fast-forward   |
 | POST   | `/api/simulator/circuit-event`    | Replay a state change (paid, dispute, opt-out) to trip a breaker |
 | GET    | `/api/simulator/profiles`         | List the available failure profiles                            |
@@ -503,7 +519,9 @@ pip install -r requirements.txt   # includes pytest + pytest-asyncio
 pytest                            # runs against a throwaway SQLite DB
 ```
 
-**106 tests, all passing.** Coverage spans the webhook HMAC signature (valid/invalid), ingestion + idempotent dedup, `payment.captured` marking an event recovered, the webhook's handoff into the agent pipeline (including that a redelivery is never re-decided, and that a pipeline error still acks rather than triggering a Razorpay retry loop), the diagnostic classifier across all failure profiles, the full diagnose→inject path, the strategy planner's tool selection, all 8 compliance rules, every confidence-gate tier plus the high-value override, the executor's per-tool outcomes and its idempotency, all 8 circuit breakers, the scheduler's due-action core against an explicit clock, the TRAI deferral, the three HITL resolutions (including a modified action being re-blocked by compliance), and the audit log, filters, and CSV/JSON export. One test pins a timezone convention rather than a behaviour: the Strategy Agent is prompted in IST and the model answers without an offset, so `test_retry_at_without_an_offset_is_read_as_ist_not_utc` asserts the exact stored instant — SQLite discards offsets on write, which makes a 5.5-hour scheduling skew invisible in the row itself.
+**139 tests, all passing.** Coverage spans the webhook HMAC signature (valid/invalid), ingestion + idempotent dedup, `payment.captured` marking an event recovered, the webhook's handoff into the agent pipeline (including that a redelivery is never re-decided, and that a pipeline error still acks rather than triggering a Razorpay retry loop), the diagnostic classifier across all failure profiles, the full diagnose→inject path, the strategy planner's tool selection, all 8 compliance rules, every confidence-gate tier plus the high-value override, the executor's per-tool outcomes and its idempotency, all 8 circuit breakers, the scheduler's due-action core against an explicit clock, the TRAI deferral, the three HITL resolutions (including a modified action being re-blocked by compliance), and the audit log, filters, and CSV/JSON export. One test pins a timezone convention rather than a behaviour: the Strategy Agent is prompted in IST and the model answers without an offset, so `test_retry_at_without_an_offset_is_read_as_ist_not_utc` asserts the exact stored instant — SQLite discards offsets on write, which makes a 5.5-hour scheduling skew invisible in the row itself.
+
+The recovery-economics maths lives in its own dependency-free module so it can be tested by calling it directly with hand-computed numbers: ROI's degenerate cases (a channel that costs nothing, an empty database, money spent for nothing recovered — three states that must not collapse into one "N/A"), the per-channel table, and the manual-recovery baseline arithmetic. The endpoint tests then guard *composition* rather than arithmetic — that a chaos preset injects what it claims to, that its circuit step reaches only the events that preset created, and that the money on the economics table equals the money on the metrics panel, since those two views sit side by side on one screen and could otherwise disagree.
 
 Two of those tests exist purely to protect the others. The mock pipeline derives a synthetic customer's payment history from a hash of their identity, so a randomly injected failure can legitimately land in different confidence bands — which would make any pipeline test that asserts a route intermittently flaky. `test_bank_downtime_injection_always_auto_approves_a_retry` and `test_high_value_injection_always_needs_a_human` sweep all 64 possible histories × a spread of hours and days and pin the two routes the other tests rely on. If someone retunes a confidence weight, those two fail loudly instead of the suite going quietly unreliable.
 
@@ -535,7 +553,7 @@ razorpay/
 │   │   ├── razorpay/client.py    # key-optional Razorpay wrapper
 │   │   ├── webhooks/             # signature.py (HMAC) + router.py
 │   │   └── api/                  # dashboard, simulator, action, hitl, audit routes
-│   ├── tests/                    # pytest suite, 106 tests (SQLite)
+│   ├── tests/                    # pytest suite, 139 tests (SQLite)
 │   ├── requirements.txt
 │   ├── Dockerfile
 │   └── .env.example
@@ -564,11 +582,13 @@ razorpay/
 - **Live Groq integration** on the free tier, with a deterministic mock fallback
 - **One pipeline, two doors**: real `payment.failed` webhooks and simulated `/inject` share a single orchestration, so live traffic runs the same agents under the same gate — and a Razorpay redelivery is never re-decided
 - Failure simulator (`/inject`, `/circuit-event`) + dashboard metrics/events endpoints
-- Docker Compose + 106-test pytest suite
+- **Recovery economics**: ROI per failure channel and a with-agent vs. modelled-manual comparison, computed from live data rather than illustrative figures
+- **Chaos presets**: 5 one-click demo scenarios as a declarative registry, plus a weighted batch runner that returns the aggregate outcome
+- Docker Compose + 139-test pytest suite
 
 **Next**
 
-- **Dashboard UI** (Next.js 15 + React 19 + Tailwind): a dual-pane command center — live SSE feed of the agent's reasoning, the HITL queue, recovery economics, and the audit trail
-- **Full simulator**: weighted chaos presets and cascade mode (retry fails differently → agent pivots → customer pays → CB-001 halts everything)
+- **Dashboard UI** (Next.js 15 + React 19 + Tailwind): a dual-pane command center — live SSE feed of the agent's reasoning, the HITL queue, recovery economics, and the audit trail. Every number it renders already has an endpoint behind it
+- **Cascade mode**: the 6th preset — a retry fails with a *different* error, so the agent re-diagnoses soft→hard and pivots from retrying to a payment link. Ships disabled in the preset registry until then
 - **Merchant-level controls**: pause recovery per merchant, per-merchant cost ceilings
 - **ARCHITECTURE.md** + a scripted demo walkthrough
