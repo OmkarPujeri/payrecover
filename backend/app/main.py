@@ -13,10 +13,14 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
+from app.api.action_routes import router as action_router
+from app.api.audit_routes import router as audit_router
 from app.api.dashboard import router as dashboard_router
+from app.api.hitl_routes import router as hitl_router
 from app.api.simulator_routes import router as simulator_router
 from app.config import settings
 from app.database import init_db
+from app.execution.scheduler import retry_scheduler
 from app.razorpay.client import razorpay_client
 from app.sse import sse_manager
 from app.webhooks.router import router as webhook_router
@@ -31,13 +35,19 @@ logger = logging.getLogger("payrecover")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    # In-process APScheduler (PRD decision #9). A missing dependency is not
+    # fatal — it returns False and due work can still be fired on demand via
+    # POST /api/simulator/run-due-actions, so the system stays demoable.
+    scheduler_started = retry_scheduler.start()
     logger.info(
-        "PayRecover backend ready | razorpay=%s | groq=%s | db=%s",
+        "PayRecover backend ready | razorpay=%s | groq=%s | db=%s | scheduler=%s",
         razorpay_client.mode,
         "live" if settings.groq_configured else "mock",
         "sqlite" if settings.is_sqlite else "postgres",
+        "on" if scheduler_started else "off (manual trigger only)",
     )
     yield
+    retry_scheduler.shutdown()
     logger.info("PayRecover backend shutting down")
 
 
@@ -54,6 +64,9 @@ app.add_middleware(
 app.include_router(webhook_router)
 app.include_router(simulator_router)
 app.include_router(dashboard_router)
+app.include_router(action_router)
+app.include_router(hitl_router)
+app.include_router(audit_router)
 
 
 @app.get("/", tags=["meta"])
@@ -75,6 +88,7 @@ async def health():
         "razorpay_mode": razorpay_client.mode,
         "groq_configured": settings.groq_configured,
         "simulation_mode": settings.simulation_mode,
+        "scheduler_running": retry_scheduler.running,
         "sse_connections": sse_manager.connection_count,
     }
 
