@@ -45,3 +45,4 @@ pgdata/
 # local — they are not part of the shipped product.
 payrecover_master_reference.md
 STATUS.md
+FRONTEND_PLAN.md
