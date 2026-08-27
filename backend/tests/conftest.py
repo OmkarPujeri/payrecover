@@ -16,7 +16,7 @@ import pytest_asyncio  # noqa: E402
 from httpx import ASGITransport, AsyncClient  # noqa: E402
 
 from app import models  # noqa: E402,F401  (register tables on Base.metadata)
-from app.database import Base, engine  # noqa: E402
+from app.database import AsyncSessionLocal, Base, engine  # noqa: E402
 from app.main import app  # noqa: E402
 
 
@@ -33,3 +33,10 @@ async def client():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
+
+
+@pytest_asyncio.fixture
+async def session():
+    """A direct DB session, for tests that drive services below the HTTP layer."""
+    async with AsyncSessionLocal() as s:
+        yield s
