@@ -15,11 +15,20 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.execution import statuses
 from app.models import RecoveryEvent
 
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+#: Opt-out signals. Razorpay itself does not emit one — an unsubscribe arrives
+#: from the merchant's own STOP handler or a DLT/TRAI consent feed — so we accept
+#: it on the same ingestion path under a first-party event name. Without this,
+#: CB-003 (Customer Opt-Out) would be unreachable in a demo, and "we honour opt
+#: outs" would be an untested claim.
+OPT_OUT_EVENTS = frozenset({"customer.opted_out", "customer.unsubscribed"})
 
 
 def parse_payment_entity(entity: dict[str, Any]) -> dict[str, Any]:
@@ -82,22 +91,36 @@ async def ingest_failure(
     return event, True
 
 
-# Which webhook events act as recovery-halting circuit breakers, and how they
-# mutate the matching recovery event(s). The full engine lands in a later
-# phase; here we wire the state transitions so the foundation is meaningful.
+# Webhook events that flip the state a circuit breaker watches. This function
+# only records *what happened*; deciding what to do about it (cancel queued
+# work, halt the case, log the trip) is ``execution.circuit_breakers``, which the
+# webhook router calls immediately afterwards. Keeping the two apart means the
+# breaker engine has exactly one implementation, whether the trigger arrives by
+# webhook, by scheduler tick, or as a pre-flight check before executing.
 async def apply_circuit_event(
     session: AsyncSession, event_type: str, entity: dict[str, Any]
 ) -> list[RecoveryEvent]:
     order_id = entity.get("order_id") or ""
     payment_id = entity.get("id") or ""
-    if not order_id and not payment_id:
-        return []
+    contact = entity.get("contact") or ""
+    email = entity.get("email") or ""
 
     stmt = select(RecoveryEvent)
     if order_id:
         stmt = stmt.where(RecoveryEvent.razorpay_order_id == order_id)
-    else:
+    elif payment_id:
         stmt = stmt.where(RecoveryEvent.razorpay_payment_id == payment_id)
+    elif event_type in OPT_OUT_EVENTS and (contact or email):
+        # An opt-out is about a *person*, not one payment: it must close the
+        # channel on every open case for that customer, not just the one that
+        # happened to carry the identifier.
+        stmt = stmt.where(
+            RecoveryEvent.customer_contact == contact
+            if contact
+            else RecoveryEvent.customer_email == email
+        )
+    else:
+        return []
 
     matches = list((await session.scalars(stmt)).all())
     if not matches:
@@ -105,15 +128,17 @@ async def apply_circuit_event(
 
     for ev in matches:
         if event_type in ("payment.captured", "order.paid", "invoice.paid"):
-            ev.recovery_status = "recovered"
+            ev.recovery_status = statuses.EV_RECOVERED
             ev.recovered_amount = int(entity.get("amount") or ev.amount)
             ev.recovered_at = _utcnow()
         elif event_type == "payment.dispute.created":
             ev.has_dispute = True
         elif event_type == "subscription.cancelled":
             ev.subscription_cancelled = True
+        elif event_type in OPT_OUT_EVENTS:
+            ev.customer_opted_out = True
         elif event_type in ("refund.created",):
-            ev.recovery_status = "unrecoverable"
+            ev.recovery_status = statuses.EV_UNRECOVERABLE
         ev.updated_at = _utcnow()
 
     await session.commit()

@@ -42,6 +42,7 @@ from app.ingest import event_to_dict
 from app.llm.client import llm_client
 from app.models import RecoveryAction, RecoveryEvent
 from app.strategy import planner
+from app.timeutil import to_utc_from_ist
 
 # Action-row status set by this stage (execution happens in a later phase).
 STATUS_APPROVED = "approved"            # compliant + auto-cleared to execute
@@ -142,18 +143,27 @@ def build_strategy_payload(
     }
 
 
-async def _load_prior_strategy_actions(
-    session: AsyncSession, event: RecoveryEvent
+async def load_prior_strategy_actions(
+    session: AsyncSession,
+    event: RecoveryEvent,
+    *,
+    exclude_action_id: Any = None,
 ) -> list[dict[str, Any]]:
-    """Prior *strategy* actions on this event, shaped for the compliance engine."""
-    rows = (
-        await session.scalars(
-            select(RecoveryAction).where(
-                RecoveryAction.recovery_event_id == event.id,
-                RecoveryAction.agent_name == "strategy",
-            )
-        )
-    ).all()
+    """Prior *strategy* actions on this event, shaped for the compliance engine.
+
+    Public because the HITL layer re-runs compliance on a merchant-modified
+    action and must feed it the identical prior-action history.
+    ``exclude_action_id`` omits one row — used so an action under review cannot
+    veto itself (e.g. the frequency cap counting the very notification being
+    re-checked).
+    """
+    stmt = select(RecoveryAction).where(
+        RecoveryAction.recovery_event_id == event.id,
+        RecoveryAction.agent_name == "strategy",
+    )
+    if exclude_action_id is not None:
+        stmt = stmt.where(RecoveryAction.id != exclude_action_id)
+    rows = (await session.scalars(stmt)).all()
     prior: list[dict[str, Any]] = []
     for a in rows:
         params = a.action_params or {}
@@ -200,7 +210,7 @@ async def recover_event(
 
     # 2) Deterministic compliance check.
     ev_dict = event_to_dict(event)
-    prior_actions = await _load_prior_strategy_actions(session, event)
+    prior_actions = await load_prior_strategy_actions(session, event)
     verdict = check_compliance(tool_name, tool_args, ev_dict, prior_actions, now=now)
 
     final_args = dict(tool_args)
@@ -224,7 +234,12 @@ async def recover_event(
             status = STATUS_ESCALATED
         cost = estimate_cost_paise(tool_name, final_args)
 
-    scheduled_at = _parse_dt(final_args.get("retry_at") or final_args.get("scheduled_at"))
+    # The planner and the Compliance Engine both work in Indian wall-clock time,
+    # so a bare timestamp here means IST. Store UTC: the scheduler compares in
+    # UTC, and SQLite keeps whatever it is handed without normalising.
+    scheduled_at = to_utc_from_ist(
+        _parse_dt(final_args.get("retry_at") or final_args.get("scheduled_at"))
+    )
 
     # 4) Persist an auditable action + advance the event.
     action = RecoveryAction(
