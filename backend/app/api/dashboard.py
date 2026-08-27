@@ -1,16 +1,18 @@
-"""Dashboard read endpoints: metrics, events list, and event detail."""
+"""Dashboard read endpoints: metrics, economics, comparison, events."""
 from __future__ import annotations
 
 import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.analytics import build_comparison, build_economics
 from app.database import get_session
 from app.ingest import event_to_dict
 from app.models import CircuitBreakerEvent, RecoveryAction, RecoveryEvent
+from app.timeutil import to_utc
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
@@ -47,6 +49,43 @@ def _cb_to_dict(c: CircuitBreakerEvent) -> dict[str, Any]:
         "cancelled_actions": c.cancelled_actions,
         "created_at": c.created_at.isoformat() if c.created_at else None,
     }
+
+
+async def _avg_recovery_hours(session: AsyncSession) -> float | None:
+    """Mean wall-clock hours from failure to recovery, or ``None`` if nothing has
+    recovered yet.
+
+    Computed in Python rather than SQL on purpose: the elapsed-time expression
+    differs between SQLite (``julianday``) and Postgres (``EXTRACT(EPOCH ...)``),
+    and the project runs on both. Only recovered rows are fetched, so the set is
+    small by construction.
+
+    Both timestamps go through ``to_utc`` before subtracting. SQLite hands back
+    naive datetimes and Postgres hands back aware ones; subtracting one of each
+    raises, and — worse — assuming a zone would reintroduce the 5.5-hour skew this
+    project has already been bitten by once.
+    """
+    rows = (
+        await session.execute(
+            select(RecoveryEvent.created_at, RecoveryEvent.recovered_at).where(
+                RecoveryEvent.recovery_status == "recovered",
+                RecoveryEvent.recovered_at.is_not(None),
+            )
+        )
+    ).all()
+
+    spans = []
+    for created_at, recovered_at in rows:
+        start, end = to_utc(created_at), to_utc(recovered_at)
+        if start is None or end is None:
+            continue
+        hours = (end - start).total_seconds() / 3600
+        if hours >= 0:
+            spans.append(hours)
+
+    if not spans:
+        return None
+    return round(sum(spans) / len(spans), 1)
 
 
 @router.get("/metrics")
@@ -94,9 +133,85 @@ async def get_metrics(session: AsyncSession = Depends(get_session)):
         "recovery_cost_inr": round(recovery_cost / 100, 2),
         "recovery_rate_by_amount_pct": round(rate_by_amount, 1),
         "recovery_rate_by_count_pct": round(rate_by_count, 1),
+        "avg_recovery_hours": await _avg_recovery_hours(session),
         "status_breakdown": {row[0]: row[1] for row in status_rows},
         "failure_breakdown": {(row[0] or "unknown"): row[1] for row in failure_rows},
     }
+
+
+@router.get("/economics")
+async def get_economics(session: AsyncSession = Depends(get_session)):
+    """ROI per failure type — which recovery channels actually pay for themselves.
+
+    Grouped on the Razorpay ``error_reason`` rather than on the simulator's
+    profile names, so the table means the same thing for live webhook traffic as
+    it does for injected traffic. ``failure_label`` is the curated human name the
+    Diagnostic Agent assigned; undiagnosed rows fall back to a prettified reason.
+
+    All arithmetic lives in ``app.analytics`` — the client renders
+    ``roi_display`` and never divides anything itself.
+    """
+    recovered_flag = case((RecoveryEvent.recovery_status == "recovered", 1), else_=0)
+
+    rows = (
+        await session.execute(
+            select(
+                RecoveryEvent.error_reason,
+                func.max(RecoveryEvent.failure_label),
+                func.max(RecoveryEvent.failure_category),
+                func.count(RecoveryEvent.id),
+                func.coalesce(func.sum(RecoveryEvent.amount), 0),
+                func.coalesce(func.sum(recovered_flag), 0),
+                func.coalesce(func.sum(RecoveryEvent.recovered_amount), 0),
+                func.coalesce(func.sum(RecoveryEvent.recovery_cost_paise), 0),
+            ).group_by(RecoveryEvent.error_reason)
+        )
+    ).all()
+
+    return build_economics(
+        {
+            "error_reason": r[0],
+            "failure_label": r[1],
+            "failure_category": r[2],
+            "count": r[3],
+            "failed_paise": r[4],
+            "recovered_count": r[5],
+            "recovered_paise": r[6],
+            "cost_paise": r[7],
+        }
+        for r in rows
+    )
+
+
+@router.get("/metrics/comparison")
+async def get_comparison(session: AsyncSession = Depends(get_session)):
+    """Before/after against the 12% manual-recovery baseline, on the same batch.
+
+    The "without" column is modelled rather than measured and the response says
+    so in ``basis`` — the same failures cannot be replayed without the agent, so
+    the honest move is to apply the industry manual rate to the identical failed
+    amount and label it as an assumption.
+    """
+    total_events = await session.scalar(select(func.count(RecoveryEvent.id))) or 0
+    failed_amount = await session.scalar(
+        select(func.coalesce(func.sum(RecoveryEvent.amount), 0))
+    ) or 0
+    recovered_amount = await session.scalar(
+        select(func.coalesce(func.sum(RecoveryEvent.recovered_amount), 0))
+    ) or 0
+    recovered_count = await session.scalar(
+        select(func.count(RecoveryEvent.id)).where(
+            RecoveryEvent.recovery_status == "recovered"
+        )
+    ) or 0
+
+    return build_comparison(
+        failed_paise=failed_amount,
+        recovered_paise=recovered_amount,
+        total_events=total_events,
+        recovered_count=recovered_count,
+        avg_recovery_hours=await _avg_recovery_hours(session),
+    )
 
 
 @router.get("/events")
