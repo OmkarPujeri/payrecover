@@ -1,7 +1,7 @@
 # PayRecover — Docker Compose
-# `docker compose up --build` boots Postgres + the backend. With no API keys
-# the backend runs in SIMULATION mode (mock Razorpay + mock LLM), so it works
-# out of the box. The Next.js frontend service is added in a later phase.
+# `docker compose up --build` boots Postgres, the backend, and the dashboard.
+# With no API keys the backend runs in SIMULATION mode (mock Razorpay + mock
+# LLM), so the whole stack works out of the box: open http://localhost:3000.
 
 services:
   db:
@@ -41,6 +41,20 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Baked into the client bundle, so it must be the address the browser
+        # reaches — the host-published backend port, not the `backend` service
+        # name (that only resolves inside the compose network).
+        NEXT_PUBLIC_API_BASE: http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
 
 volumes:
   pgdata:
