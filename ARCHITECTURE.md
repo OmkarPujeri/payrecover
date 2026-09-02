@@ -583,15 +583,10 @@ relies on would be replaced by proper fixtures.
 code, which is correct but racy under concurrency. A partial unique index on "one active action per
 event per type" would make the guarantee structural.
 
-**Cost accounting would be per-merchant.** `COST-001` enforces a per-order ceiling. Merchant-level
-budgets and a merchant-level pause switch are the obvious next rules, and the engine takes them as
-two more entries in the same table.
-
 ---
 
 <div align="center">
 
-*Design source of truth for the remaining roadmap items lives with the project maintainer.
-For the user-facing tour, see the [README](README.md).*
+*For the user-facing tour, see the [README](README.md).*
 
 </div>
