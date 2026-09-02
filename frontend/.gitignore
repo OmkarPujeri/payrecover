@@ -1,0 +1,15 @@
+node_modules/
+.next/
+out/
+build/
+.env.local
+.env*.local
+
+# The root .gitignore's `.env.*` rule would otherwise swallow this. It holds no
+# secrets — just NEXT_PUBLIC_API_BASE — and documents how to point the dashboard
+# at a backend when running outside Docker, so it ships.
+!.env.local.example
+
+*.tsbuildinfo
+.DS_Store
+npm-debug.log*
