@@ -46,3 +46,8 @@ pgdata/
 payrecover_master_reference.md
 STATUS.md
 FRONTEND_PLAN.md
+COMMIT_PLAN.md
+
+# ---- Local tool / agent state (never shipped) ----
+.claude/
+.playwright-mcp/
