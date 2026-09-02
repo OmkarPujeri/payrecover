@@ -19,7 +19,7 @@ instant a circuit breaker says stop.
 ![Tests](https://img.shields.io/badge/tests-142%20passing-brightgreen)
 
 **[Quick start](#quick-start) · [The core idea](#the-core-idea-compliance-is-code) ·
-[How it works](#how-it-works) · [Architecture deep-dive](ARCHITECTURE.md) · [Demo script](DEMO.md)**
+[How it works](#how-it-works) · [Architecture deep-dive](ARCHITECTURE.md)**
 
 </div>
 
@@ -371,9 +371,6 @@ they come back `"mock"` — same shape either way.
 
 </details>
 
-🎬 **[Scripted 5-minute demo walkthrough →](DEMO.md)** — beat by beat, with fallback plans and the
-questions judges tend to ask.
-
 ---
 
 ## Configuration
@@ -615,7 +612,6 @@ razorpay/
 │       └── hooks/useSSE.ts       # the single SSE connection
 ├── docker-compose.yml
 ├── ARCHITECTURE.md
-├── DEMO.md
 └── README.md
 ```
 
@@ -629,7 +625,6 @@ razorpay/
 | --- | ------------ |
 | **README** (this file) | What it does, how to run it, the rules and tools |
 | **[ARCHITECTURE.md](ARCHITECTURE.md)** | Module map, design decisions, the timezone convention, data model, bugs worth recording, scale limits |
-| **[DEMO.md](DEMO.md)** | The scripted 5-minute walkthrough, fallback plans, likely judge questions |
 
 ---
 
@@ -661,6 +656,6 @@ razorpay/
 
 <div align="center">
 
-**[Quick start](#quick-start) · [Architecture](ARCHITECTURE.md) · [Demo script](DEMO.md)**
+**[Quick start](#quick-start) · [Architecture](ARCHITECTURE.md)**
 
 </div>

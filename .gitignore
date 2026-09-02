@@ -41,12 +41,13 @@ __MACOSX/
 pgdata/
 
 # ---- Project internal docs (not for the public repo) ----
-# The PRD / design source-of-truth and the internal build tracker are kept
-# local — they are not part of the shipped product.
+# The PRD / design source-of-truth, the internal build tracker and the stage
+# script are kept local — they are not part of the shipped product.
 payrecover_master_reference.md
 STATUS.md
 FRONTEND_PLAN.md
 COMMIT_PLAN.md
+DEMO.md
 
 # ---- Local tool / agent state (never shipped) ----
 .claude/
