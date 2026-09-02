@@ -127,7 +127,7 @@ async def _handle_payment_link(
         "sms": bool(params.get("notify_sms")),
         "email": bool(params.get("notify_email")),
     }
-    description = params.get("description") or f"Complete your payment — {event.failure_label or 'Payment Failed'}"
+    description = params.get("description") or f"Complete your payment: {event.failure_label or 'Payment Failed'}"
 
     notes = {
         "recovery_event_id": str(event.id),
@@ -141,7 +141,7 @@ async def _handle_payment_link(
         suggested = params.get("suggested_method") or "upi"
         notes["preferred_method"] = suggested
         notes["original_method"] = params.get("original_method") or (event.payment_method or "")
-        description = f"{description} — pay via {str(suggested).upper()}"
+        description = f"{description} · pay via {str(suggested).upper()}"
 
     link = await razorpay_client.create_payment_link(
         amount=amount,
@@ -447,7 +447,7 @@ async def execute_action(
             # CB-008 would put a compliance trip in the audit trail that never
             # happened, so it gets its own reason.
             defer_to = explicit
-            defer_reason = "Not yet due — waiting for the agent's chosen send time"
+            defer_reason = "Not yet due: waiting for the agent's chosen send time"
 
         if defer_to is not None:
             action.status = statuses.SCHEDULED
@@ -476,7 +476,7 @@ async def execute_action(
                 "action_type": action.action_type,
                 "status": action.status,
                 "reason": "deferred",
-                "detail": f"Deferred to {defer_to.isoformat()} — {defer_reason}.",
+                "detail": f"Deferred to {defer_to.isoformat()}: {defer_reason}.",
                 "scheduled_at": defer_to.isoformat(),
             }
 

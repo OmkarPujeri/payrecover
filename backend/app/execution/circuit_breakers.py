@@ -131,7 +131,7 @@ def evaluate_breakers(
             breaker_id="CB-001",
             breaker_name="Payment Recovered",
             trigger_type="payment_recovered",
-            reason="Payment already recovered — cancelling all pending recovery actions.",
+            reason="Payment already recovered: cancelling all pending recovery actions.",
         )
 
     # CB-002 — a dispute is a legal process; automated dunning must not continue.
@@ -140,7 +140,7 @@ def evaluate_breakers(
             breaker_id="CB-002",
             breaker_name="Dispute Raised",
             trigger_type="dispute_created",
-            reason="Dispute raised on this payment — halting all recovery (legal risk).",
+            reason="Dispute raised on this payment: halting all recovery (legal risk).",
             event_status=statuses.EV_HALTED,
         )
 
@@ -150,7 +150,7 @@ def evaluate_breakers(
             breaker_id="CB-003",
             breaker_name="Customer Opt-Out",
             trigger_type="customer_opted_out",
-            reason="Customer opted out of communications — closing the channel permanently.",
+            reason="Customer opted out of communications: closing the channel permanently.",
             event_status=statuses.EV_HALTED,
         )
 
@@ -160,7 +160,7 @@ def evaluate_breakers(
             breaker_id="CB-004",
             breaker_name="Subscription Cancelled",
             trigger_type="subscription_cancelled",
-            reason="Subscription cancelled — the customer has left; stopping recovery.",
+            reason="Subscription cancelled: the customer has left; stopping recovery.",
             event_status=statuses.EV_HALTED,
         )
 
@@ -172,7 +172,7 @@ def evaluate_breakers(
             breaker_name="NPCI Retry Cap",
             trigger_type="retry_cap_exceeded",
             reason=(
-                f"Retry cap exceeded ({attempts} authorised > {MAX_RETRIES} NPCI max) — "
+                f"Retry cap exceeded ({attempts} authorised > {MAX_RETRIES} NPCI max): "
                 "cancelling queued retries; recovery is notification-only from here."
             ),
             only_cancel_types=(_RETRY_TOOL,),
@@ -187,7 +187,7 @@ def evaluate_breakers(
             breaker_name="Max Recovery Window",
             trigger_type="window_expired",
             reason=(
-                f"Recovery window expired ({days:.0f} days > {MAX_WINDOW_DAYS} day max) — "
+                f"Recovery window expired ({days:.0f} days > {MAX_WINDOW_DAYS} day max): "
                 "closing automated recovery and escalating."
             ),
             event_status=statuses.EV_ESCALATED,
@@ -204,7 +204,7 @@ def evaluate_breakers(
             trigger_type="negative_economics",
             reason=(
                 f"Recovery cost (Rs {cost / 100:.2f}) exceeds 15% of the order "
-                f"(Rs {amount / 100:.2f}) — not worth pursuing; escalating."
+                f"(Rs {amount / 100:.2f}); not worth pursuing, escalating."
             ),
             event_status=statuses.EV_ESCALATED,
             details={"recovery_cost_paise": cost, "amount": amount},

@@ -99,10 +99,10 @@ def score_recoverability(
 
     if category == SOFT:
         score += 20
-        positives.append("Soft failure — a retry will likely succeed")
+        positives.append("Soft failure: a retry will likely succeed")
     elif category == TERMINAL:
         score -= 20
-        risks.append("Terminal failure — not safely retryable")
+        risks.append("Terminal failure: not safely retryable")
 
     if success_rate is not None:
         pct = round(success_rate * 100)
@@ -115,7 +115,7 @@ def score_recoverability(
 
     if bank_downtime:
         score += 10
-        positives.append("Issuer bank downtime is active — will self-resolve")
+        positives.append("Issuer bank downtime is active: will self-resolve")
 
     if prior_attempts >= 2:
         score -= 10
@@ -127,7 +127,7 @@ def score_recoverability(
 
     if amount_paise >= HIGH_VALUE_PAISE:
         score += 5
-        positives.append("High-value order — customer has more incentive to pay")
+        positives.append("High-value order: customer has more incentive to pay")
 
     score = max(0, min(100, score))
     return score, positives, risks
@@ -151,35 +151,35 @@ def recommend_timing(
 
     if reason_key in ("gateway_timeout", "network_timeout"):
         if is_night:
-            return "delay_hours_8", "Transient gateway error at night — retry after banks clear maintenance around 6 AM IST"
-        return "immediate", "Transient gateway error — an immediate retry will most likely clear it"
+            return "delay_hours_8", "Transient gateway error at night: retry after banks clear maintenance around 6 AM IST"
+        return "immediate", "Transient gateway error: an immediate retry will most likely clear it"
 
     if reason_key == "issuer_bank_down":
-        return "wait_for_event", "Issuer bank is in maintenance — wait for it to come back up (typically by ~6 AM IST)"
+        return "wait_for_event", "Issuer bank is in maintenance: wait for it to come back up (typically by ~6 AM IST)"
 
     if reason_key == "invalid_otp":
-        return "immediate", "Customer was actively trying to pay — retry immediately while intent is high"
+        return "immediate", "Customer was actively trying to pay: retry immediately while intent is high"
 
     if reason_key == "insufficient_funds":
         if day_of_month is not None and day_of_month >= 25:
-            return "wait_for_event", "Insufficient funds near month-end — wait for the 1st when salary is likely credited"
-        return "delay_hours_48", "Insufficient funds — give the customer ~48 hours before re-attempting"
+            return "wait_for_event", "Insufficient funds near month-end: wait for the 1st when salary is likely credited"
+        return "delay_hours_48", "Insufficient funds: give the customer ~48 hours before re-attempting"
 
     if reason_key == "card_expired":
-        return "immediate", "Card expired — send a payment link now so the customer can pay with a valid method"
+        return "immediate", "Card expired: send a payment link now so the customer can pay with a valid method"
 
     if reason_key == "payment_cancelled_by_user":
-        return "delay_hours_24", "Customer cancelled — wait ~24 hours before a gentle nudge, don't annoy them immediately"
+        return "delay_hours_24", "Customer cancelled: wait ~24 hours before a gentle nudge, don't annoy them immediately"
 
     if reason_key == "mandate_inactive":
-        return "wait_for_event", "E-mandate is inactive — recovery needs mandate re-authorisation first"
+        return "wait_for_event", "E-mandate is inactive: recovery needs mandate re-authorisation first"
 
     if category == TERMINAL:
-        return "wait_for_event", "Terminal failure — do not retry; escalate for manual review"
+        return "wait_for_event", "Terminal failure: do not retry; escalate for manual review"
 
     if category == SOFT:
-        return "immediate", "Soft failure — safe to retry immediately"
-    return "delay_hours_24", "Needs customer action — allow some time before a follow-up"
+        return "immediate", "Soft failure: safe to retry immediately"
+    return "delay_hours_24", "Needs customer action: allow some time before a follow-up"
 
 
 # ---- Root-cause narrative ------------------------------------------------ #
@@ -190,11 +190,11 @@ def _root_cause(reason: str | None, category: str, label: str) -> str:
         "network_timeout": "A network timeout interrupted the authorisation round-trip. The customer's payment instrument is almost certainly fine; the request simply didn't complete in time.",
         "issuer_bank_down": "The customer's issuing bank was temporarily down for maintenance and could not authorise the payment. This resolves on its own once the bank's systems come back online.",
         "invalid_otp": "Authentication failed because an incorrect or expired OTP was entered. The customer was actively trying to pay, so a fresh attempt usually succeeds.",
-        "insufficient_funds": "The bank declined the charge for insufficient funds. The customer intends to pay but lacked balance at that moment — timing the retry around a salary credit materially improves recovery.",
+        "insufficient_funds": "The bank declined the charge for insufficient funds. The customer intends to pay but lacked balance at that moment; timing the retry around a salary credit materially improves recovery.",
         "card_expired": "The charge was declined because the card has expired. Recovery requires the customer to supply a valid payment method, best prompted with a payment link.",
         "payment_cancelled_by_user": "The customer abandoned the payment mid-flow. There is no technical fault; recovery depends on re-engaging them, ideally after a short cool-off.",
         "mandate_inactive": "The e-mandate backing this payment is inactive or revoked, so the auto-debit could not run. The mandate must be re-authorised before recovery is possible.",
-        "payment_risk_threshold_breached": "Razorpay's risk engine blocked this payment for breaching a fraud/risk threshold. Retrying is unsafe and could increase dispute exposure — this should be escalated, not automated.",
+        "payment_risk_threshold_breached": "Razorpay's risk engine blocked this payment for breaching a fraud/risk threshold. Retrying is unsafe and could increase dispute exposure; this should be escalated, not automated.",
     }
     if reason_key in templates:
         return templates[reason_key]

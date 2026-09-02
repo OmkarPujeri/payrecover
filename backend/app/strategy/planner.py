@@ -156,7 +156,7 @@ def plan(payload: dict[str, Any]) -> tuple[str, dict[str, Any], dict[str, Any]]:
                 {
                     "order_id": order_id,
                     "reason": (
-                        "Risk threshold breached — Razorpay's fraud engine blocked this "
+                        "Risk threshold breached: Razorpay's fraud engine blocked this "
                         "payment. Retrying is unsafe and raises dispute exposure; closing "
                         "the case as unrecoverable."
                     ),
@@ -171,7 +171,7 @@ def plan(payload: dict[str, Any]) -> tuple[str, dict[str, Any], dict[str, Any]]:
                 "severity": "high",
                 "reason": (
                     f"Terminal failure ({label}) that automated recovery cannot safely "
-                    "handle — routing to the merchant for manual review."
+                    "handle; routing to the merchant for manual review."
                 ),
                 "recommended_action": "Investigate the integration / risk flag before any manual retry.",
             },
@@ -183,7 +183,7 @@ def plan(payload: dict[str, Any]) -> tuple[str, dict[str, Any], dict[str, Any]]:
         # Retry cap (constraint 1): after 3 attempts, stop retrying and hand to
         # the customer / merchant instead of violating the NPCI cap.
         if prior_attempts >= 3:
-            uncertainty.append(f"Retry cap reached ({prior_attempts}/3) — cannot schedule another retry")
+            uncertainty.append(f"Retry cap reached ({prior_attempts}/3): cannot schedule another retry")
             return (
                 GENERATE_PAYMENT_LINK,
                 _payment_link_args(event, amount_paise, order_id, label, _DEFAULT_EXPIRY_HOURS,
@@ -219,23 +219,23 @@ def plan(payload: dict[str, Any]) -> tuple[str, dict[str, Any], dict[str, Any]]:
 
     if reason == "insufficient_funds":
         # 48h link; the diagnosis already defers timing around the salary cycle.
-        note = "Insufficient funds — 48h payment link; timing accounts for the salary cycle so the customer can complete when funded."
+        note = "Insufficient funds: 48h payment link; timing accounts for the salary cycle so the customer can complete when funded."
         expiry = 48
     elif reason == "card_expired":
-        note = "Card expired — payment link inviting the customer to pay with a new card or UPI."
+        note = "Card expired: payment link inviting the customer to pay with a new card or UPI."
         expiry = _DEFAULT_EXPIRY_HOURS
     elif reason == "invalid_otp":
-        note = "OTP failed while the customer was actively paying — sending an immediate payment link to complete now."
+        note = "OTP failed while the customer was actively paying; sending an immediate payment link to complete now."
         expiry = 24
     elif reason == "payment_cancelled_by_user":
-        note = "Customer abandoned checkout — a friendly payment link after a short cool-off to re-engage without nagging."
+        note = "Customer abandoned checkout: a friendly payment link after a short cool-off to re-engage without nagging."
         expiry = _DEFAULT_EXPIRY_HOURS
-        uncertainty.append("Customer cancelled deliberately — intent to complete is uncertain")
+        uncertainty.append("Customer cancelled deliberately: intent to complete is uncertain")
     elif reason == "mandate_inactive":
-        note = "E-mandate inactive/revoked — payment link for re-registration so the auto-debit can resume."
+        note = "E-mandate inactive/revoked: payment link for re-registration so the auto-debit can resume."
         expiry = _DEFAULT_EXPIRY_HOURS
     else:
-        note = f"{label}: hard failure requiring customer action — issuing a self-service payment link."
+        note = f"{label}: hard failure requiring customer action; issuing a self-service payment link."
         expiry = _DEFAULT_EXPIRY_HOURS
 
     return (
@@ -262,7 +262,7 @@ def _payment_link_args(
         "order_id": order_id,
         "amount_paise": amount_paise,
         "expiry_hours": int(max(4, min(168, expiry_hours))),
-        "description": f"Complete your payment — {label}",
+        "description": f"Complete your payment: {label}",
         "customer_email": email,
         "customer_contact": contact,
         # DND customers: email only (constraint 6). Otherwise notify on both.

@@ -195,7 +195,7 @@ def build_comparison(
         "basis": (
             "The 'without' column applies the industry manual-recovery rate "
             f"({round(baseline_rate * 100, 1)}%) to the same failed amount. "
-            "Modelled, not measured — the same batch cannot be replayed twice."
+            "Modelled, not measured: the same batch cannot be replayed twice."
         ),
         "without": {
             "label": "WITHOUT PAYRECOVER",

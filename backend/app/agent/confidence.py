@@ -60,16 +60,16 @@ def evaluate(confidence: int, order_value_paise: int = 0) -> GateDecision:
 
     if c >= _HIGH:
         tier, action, human = "high", AUTO_EXECUTE, False
-        reason = f"High confidence ({c}) — executing automatically."
+        reason = f"High confidence ({c}): executing automatically."
     elif c >= _MODERATE:
         tier, action, human = "moderate", AUTO_EXECUTE_FLAGGED, False
-        reason = f"Moderate confidence ({c}) — executing but flagged for monitoring."
+        reason = f"Moderate confidence ({c}): executing but flagged for monitoring."
     elif c >= _LOW:
         tier, action, human = "low", HITL_REVIEW, True
-        reason = f"Low confidence ({c}) — pausing for merchant review."
+        reason = f"Low confidence ({c}): pausing for merchant review."
     else:
         tier, action, human = "very_low", ESCALATE, True
-        reason = f"Very low confidence ({c}) — escalating to the merchant."
+        reason = f"Very low confidence ({c}): escalating to the merchant."
 
     # High-value override: a large order is ALWAYS pinned to human review — we
     # neither auto-execute it nor auto-escalate/close it without a human. (An
@@ -82,7 +82,7 @@ def evaluate(confidence: int, order_value_paise: int = 0) -> GateDecision:
             confidence=c,
             reason=(
                 f"Order value Rs {order_value_paise / 100:,.0f} exceeds the "
-                f"Rs {HITL_ORDER_VALUE_PAISE / 100:,.0f} auto-handling ceiling — "
+                f"Rs {HITL_ORDER_VALUE_PAISE / 100:,.0f} auto-handling ceiling, so it is "
                 f"pinned to human review regardless of {tier} confidence ({c})."
             ),
         )
