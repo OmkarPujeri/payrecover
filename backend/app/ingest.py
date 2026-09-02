@@ -122,14 +122,25 @@ async def apply_circuit_event(
     else:
         return []
 
+    # Oldest first, so "the first row" below is the original failure, not
+    # whichever row the query happened to return first.
+    stmt = stmt.order_by(RecoveryEvent.created_at.asc(), RecoveryEvent.id.asc())
     matches = list((await session.scalars(stmt)).all())
     if not matches:
         return []
 
-    for ev in matches:
+    for i, ev in enumerate(matches):
         if event_type in ("payment.captured", "order.paid", "invoice.paid"):
             ev.recovery_status = statuses.EV_RECOVERED
-            ev.recovered_amount = int(entity.get("amount") or ev.amount)
+            # One capture is one payment. When several failure rows share an
+            # order (a retry that failed again — the cascade journey), the
+            # money still came back ONCE, so only the original row carries the
+            # recovered amount; the follow-up rows resolve at zero. Assigning
+            # the full amount per row would multiply recovered cash by the
+            # number of failed attempts on the order.
+            ev.recovered_amount = (
+                int(entity.get("amount") or ev.amount) if i == 0 else 0
+            )
             ev.recovered_at = _utcnow()
         elif event_type == "payment.dispute.created":
             ev.has_dispute = True
