@@ -23,10 +23,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from typing import Any, Callable
 
 from app.agent.tools import GROQ_TOOLS, TOOL_NAMES
 from app.config import Settings, settings as global_settings
+
+logger = logging.getLogger(__name__)
 
 # Default Groq chat model. The buildathon originally standardised on
 # llama-3.3-70b-versatile, but Groq decommissioned it (every call 404s), so we
@@ -57,6 +60,7 @@ class LLMClient:
 
                 self._client = Groq(api_key=settings.groq_api_key)
             except Exception:  # noqa: BLE001 — any import/auth issue -> mock
+                logger.warning("Groq client init failed — falling back to mock", exc_info=True)
                 self.simulation = True
 
     @property
@@ -108,6 +112,11 @@ class LLMClient:
                 raise ValueError("LLM returned non-object JSON")
             return data, "llm"
         except Exception:  # noqa: BLE001 — never let an LLM hiccup break recovery
+            logger.warning(
+                "Live Groq JSON call failed (%s) — using deterministic fallback",
+                self.model,
+                exc_info=True,
+            )
             return fallback(user_payload), "mock"
 
     def _raw_completion(
@@ -171,6 +180,11 @@ class LLMClient:
             _, _, meta = fallback(user_payload)
             return tool_name, args, {**meta, "source": "llm"}, "llm"
         except Exception:  # noqa: BLE001 — never let an LLM hiccup break recovery
+            logger.warning(
+                "Live Groq tool call failed (%s) — using deterministic fallback",
+                self.model,
+                exc_info=True,
+            )
             tool_name, args, meta = fallback(user_payload)
             return tool_name, args, {**meta, "source": "mock"}, "mock"
 
