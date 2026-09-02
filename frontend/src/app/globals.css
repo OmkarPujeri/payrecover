@@ -1,0 +1,137 @@
+@import "tailwindcss";
+
+/*
+ * PayRecover design system - Tailwind v4, CSS-first. No tailwind.config.ts:
+ * in v4 the config file is vestigial and the PRD's mention of one is a v3 habit.
+ *
+ * The whole palette is neutral except the FIVE trace-state colors - those are the
+ * only chroma allowed anywhere in the product (PRD constraint). Two materials:
+ * the dark console (left, the machine) and the light ledger (right, the record).
+ */
+
+@theme {
+  /* --- surfaces ---------------------------------------------------------- */
+  --color-ink: #0e1116; /* console base - cold graphite, not black */
+  --color-ink-raised: #161b22; /* cards on the console */
+  --color-ink-text: #e6e9ee; /* primary text on console */
+  --color-ink-dim: #9aa4b2; /* secondary text on console */
+  --color-ink-faint: #6b7480; /* tertiary / captions on console */
+  --color-rule: rgb(255 255 255 / 0.08); /* hairlines on console */
+
+  --color-paper: #f7f6f3; /* ledger surface */
+  --color-paper-raised: #ffffff; /* cards on paper */
+  --color-paper-text: #16191f; /* primary text on paper */
+  --color-paper-dim: #565c66; /* secondary text on paper */
+  --color-paper-faint: #8a909a; /* tertiary on paper */
+  --color-paper-rule: rgb(14 17 22 / 0.1); /* rules on paper */
+
+  /* --- the five state lamps (the only chroma) ---------------------------- */
+  --color-state-pending: #6b7280; /* ⚪ grey */
+  --color-state-running: #3b82f6; /* 🔵 blue, pulsing */
+  --color-state-done: #3fa46a; /* 🟢 green, desaturated */
+  --color-state-waiting: #c98a2e; /* 🟡 amber */
+  --color-state-blocked: #c4483f; /* 🔴 brick red */
+
+  /* soft fills for the state colors, for chips/wash on paper */
+  --color-state-done-wash: rgb(63 164 106 / 0.12);
+  --color-state-waiting-wash: rgb(201 138 46 / 0.14);
+  --color-state-blocked-wash: rgb(196 72 63 / 0.12);
+  --color-state-running-wash: rgb(59 130 246 / 0.14);
+
+  /* --- type -------------------------------------------------------------- */
+  --font-sans: var(--font-plex-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, "SF Mono", monospace;
+}
+
+/*
+ * Base. The document is dark-first (the console is the frame); the ledger pane
+ * paints its own light surface. One elevation step, 4px radius throughout - both
+ * enforced here rather than repeated per component.
+ */
+:root {
+  color-scheme: dark;
+}
+
+* {
+  border-color: var(--color-rule);
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--color-ink);
+  color: var(--color-ink-text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Monospace figures are tabular everywhere, so the ₹ counter can't jitter. */
+.font-mono,
+code,
+kbd,
+samp {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1, "zero" 1;
+}
+
+/* Single elevation step. */
+.shadow-panel {
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.25), 0 8px 24px rgb(0 0 0 / 0.18);
+}
+.shadow-sheet {
+  box-shadow: -12px 0 40px rgb(0 0 0 / 0.28);
+}
+
+/* Keyboard focus is always visible. */
+:focus-visible {
+  outline: 2px solid var(--color-state-running);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/*
+ * The running-state pulse, used by the trace's active node and the live dot.
+ * Degrades to a steady lamp when the user prefers reduced motion.
+ */
+@keyframes lamp-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 rgb(59 130 246 / 0.5);
+  }
+  50% {
+    opacity: 0.7;
+    box-shadow: 0 0 0 4px rgb(59 130 246 / 0);
+  }
+}
+.lamp-pulse {
+  animation: lamp-pulse 1.6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .lamp-pulse {
+    animation: none;
+  }
+  * {
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Thin, unobtrusive scrollbars inside scrolling panels. */
+.scroll-quiet {
+  scrollbar-width: thin;
+}
+.scroll-quiet::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scroll-quiet::-webkit-scrollbar-thumb {
+  background: rgb(128 128 128 / 0.35);
+  border-radius: 4px;
+}
+.scroll-quiet::-webkit-scrollbar-track {
+  background: transparent;
+}
