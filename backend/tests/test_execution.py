@@ -1071,6 +1071,44 @@ async def test_audit_export_csv_and_json(client):
     assert (await client.get("/api/audit/export?format=xml")).status_code == 422
 
 
+async def test_audit_export_is_never_truncated(client, session):
+    """The export defaults to the WHOLE filtered chain, not a 500-row page.
+
+    Regression: the endpoint used to default ``limit=500`` and the dashboard
+    never passed one, so once the audit log passed 500 rows the downloaded
+    file silently had fewer entries than the drawer said existed — an
+    authoritative-looking file that was wrong. Bulk rows are inserted directly
+    (the pipeline need not run 500 times to prove a query has no ceiling).
+    """
+    ev = RecoveryEvent(
+        razorpay_payment_id="pay_bulk", razorpay_order_id="order_bulk",
+        event_type="payment.failed", amount=250000,
+    )
+    session.add(ev)
+    await session.flush()
+    session.add_all(
+        RecoveryAction(
+            recovery_event_id=ev.id, agent_name="strategy",
+            action_type="generate_payment_link", action_params={},
+            status="completed",
+        )
+        for _ in range(600)
+    )
+    await session.commit()
+
+    csv_resp = await client.get("/api/audit/export?format=csv")
+    assert csv_resp.status_code == 200
+    rows = list(csv.reader(io.StringIO(csv_resp.text)))
+    assert len(rows) == 601  # header + 600 — no 500-row ceiling
+
+    json_resp = await client.get("/api/audit/export?format=json")
+    assert len(json_resp.json()["entries"]) == 600
+
+    # An explicit limit is still honoured for callers who want a bounded file.
+    bounded = await client.get("/api/audit/export?format=json&limit=10")
+    assert len(bounded.json()["entries"]) == 10
+
+
 async def test_breaker_log_endpoint(client):
     inject = await client.post(
         "/api/simulator/inject",

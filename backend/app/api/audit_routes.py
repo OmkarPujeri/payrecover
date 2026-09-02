@@ -104,7 +104,7 @@ async def _query_actions(
     action_type: str | None,
     status: str | None,
     compliance_decision: str | None,
-    limit: int,
+    limit: int | None,
     skip: int,
 ) -> tuple[int, list[dict[str, Any]]]:
     stmt = select(RecoveryAction)
@@ -130,11 +130,13 @@ async def _query_actions(
         count_stmt = count_stmt.where(f)
 
     total = await session.scalar(count_stmt) or 0
-    actions = (
-        await session.scalars(
-            stmt.order_by(RecoveryAction.created_at.desc()).limit(limit).offset(skip)
-        )
-    ).all()
+    # `limit=None` means unbounded — used by the export, which must never
+    # silently truncate: a file with fewer rows than the log claims is worse
+    # than no file, because it looks authoritative.
+    query = stmt.order_by(RecoveryAction.created_at.desc()).offset(skip)
+    if limit is not None:
+        query = query.limit(limit)
+    actions = (await session.scalars(query)).all()
 
     # Cache events so a page of actions on one event is a single lookup.
     events: dict[Any, RecoveryEvent | None] = {}
@@ -211,7 +213,10 @@ async def export_audit(
     action_type: str | None = None,
     status: str | None = None,
     compliance_decision: str | None = None,
-    limit: int = Query(500, ge=1, le=5000),
+    # No default: an export that quietly stopped at a ceiling would hand a
+    # judge a file with fewer rows than the drawer says exist. Callers who
+    # want a bounded export may pass one explicitly.
+    limit: int | None = Query(None, ge=1, le=20000),
     session: AsyncSession = Depends(get_session),
 ):
     """Download the audit trail as CSV (flat) or JSON (full nested records)."""
