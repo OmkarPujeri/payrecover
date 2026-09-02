@@ -628,32 +628,6 @@ razorpay/
 
 ---
 
-## Roadmap
-
-**Done — the full autonomous loop**
-
-- FastAPI foundation, key-optional config, async DB + 3-table schema
-- Webhook receiver: HMAC verification, dedup, circuit-event handling
-- **Diagnostic Agent** (LLM #1) and **Strategy Agent** (LLM #2) over 6 bounded tools
-- **Compliance Engine**: 8 deterministic NPCI / TRAI / DND / dispute / cost rules
-- **Confidence gate + HITL** with the high-value override and compliance re-check on modify
-- **Execution engine**: idempotent executor, payment links, retry orders, notifications
-- **Circuit breakers** CB-001..008, run on webhooks and again pre-flight
-- **Scheduler**: APScheduler over a deterministic due-action core, with on-demand fast-forward
-- **Audit trail**: full reasoning chain, breaker log, untruncated CSV + JSON export
-- **Live Groq integration** on the free tier, with a deterministic mock fallback
-- **One pipeline, two doors**: webhooks and `/inject` share one orchestration under one gate
-- **Recovery economics**: ROI per channel and a modelled-manual comparison, from live data
-- **Chaos presets**: 6 one-click scenarios including cascade mode, plus a weighted batch runner
-- **The dashboard**: dual-pane SSE command center with the IST compliance band
-- Docker Compose across all three services; 142-test suite
-
-**Next**
-
-- **Merchant-level controls**: pause recovery per merchant, per-merchant cost ceilings
-
----
-
 <div align="center">
 
 **[Quick start](#quick-start) · [Architecture](ARCHITECTURE.md)**
