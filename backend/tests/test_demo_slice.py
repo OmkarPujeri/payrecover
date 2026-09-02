@@ -177,10 +177,12 @@ async def test_presets_drive_the_button_row_from_the_server(client):
     assert presets["hdfc_bank_crash"]["event_count"] == 5
     assert presets["salary_day_batch"]["event_count"] == 20
 
-    # An unavailable preset renders disabled, with its own reason.
-    assert presets["cascade_failure"]["available"] is False
-    assert presets["cascade_failure"]["unavailable_reason"]
-    assert presets["cascade_failure"]["event_count"] == 0
+    # All six presets ship enabled — cascade mode landed in phase 5c. Its
+    # event_count is 1: the follow-up failure continues that same order's
+    # story (it is a new *payment* on the same order), not a second button.
+    assert presets["cascade_failure"]["available"] is True
+    assert presets["cascade_failure"]["unavailable_reason"] is None
+    assert presets["cascade_failure"]["event_count"] == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -193,15 +195,173 @@ async def test_chaos_rejects_an_unknown_preset(client):
 
 
 async def test_chaos_refuses_an_unavailable_preset_loudly(client):
-    """A 200 with an empty run would read as "the scenario found nothing to do"."""
-    r = await client.post("/api/simulator/chaos/cascade_failure")
+    """A 200 with an empty run would read as "the scenario found nothing to do".
 
-    assert r.status_code == 409
-    detail = r.json()["detail"]
-    assert detail["preset"] == "cascade_failure"
-    assert detail["reason"]
-    # And it must not have injected anything on the way out.
-    assert (await client.get("/api/dashboard/metrics")).json()["total_events"] == 0
+    Every registered preset is available now, so the refusal is exercised by
+    registering a deliberately-broken one for the duration of the test — the
+    behaviour is worth guarding for the next preset that ships disabled.
+    """
+    CHAOS_PRESETS["_test_unavailable"] = {
+        "name": "Test Preset",
+        "description": "registered but not built",
+        "narrative": "n",
+        "available": False,
+        "unavailable_reason": "not built yet",
+        "steps": [],
+    }
+    try:
+        r = await client.post("/api/simulator/chaos/_test_unavailable")
+
+        assert r.status_code == 409
+        detail = r.json()["detail"]
+        assert detail["preset"] == "_test_unavailable"
+        assert detail["reason"]
+        # And it must not have injected anything on the way out.
+        assert (await client.get("/api/dashboard/metrics")).json()["total_events"] == 0
+    finally:
+        del CHAOS_PRESETS["_test_unavailable"]
+
+
+async def test_chaos_cascade_failure(client):
+    """The pivot story: retry fails differently -> agent re-diagnoses and pivots.
+
+    One customer fails against a down bank (soft, auto-approved silent retry).
+    The clock jumps, the retry fires — and this time the SAME order fails with
+    insufficient funds. The agent re-diagnoses (soft -> hard) and pivots from a
+    retry to a payment link, which it auto-executes. Then the customer pays and
+    CB-001 closes the case out.
+
+    Every routing assertion rides on the pinned customer documented in
+    ``app/chaos.py``: the enricher hashes identity into history, so Neha
+    Chopra's 98%-success history is fixed, which pins the pivot's confidence
+    at exactly 70 — moderate, auto-execute but flagged — at any hour of any
+    day the demo runs. See the guard test below.
+    """
+    r = await client.post("/api/simulator/chaos/cascade_failure")
+    assert r.status_code == 200
+    body = r.json()
+
+    assert body["preset"] == "cascade_failure"
+    assert body["injected"] == 2  # the original failure + the cascade follow-up
+    assert [s["op"] for s in body["steps"]] == [
+        "inject", "fast_forward", "cascade_fail", "circuit",
+    ]
+
+    original, follow_up = body["events"]
+
+    # Beat 1: bank downtime auto-approves a silent retry — deterministic at
+    # Rs 2,500 for every possible history.
+    assert original["failure_type"] == "bank_downtime"
+    assert original["tool"] == "schedule_smart_retry"
+    assert original["requires_human"] is False
+    assert original["gate_action"] in ("auto_execute", "auto_execute_flagged")
+
+    # Beat 2: the retry fired during the fast-forward. How many came due
+    # depends on the hour; that one did does not.
+    assert body["actions_fired"] >= 1
+
+    # Beat 3: the pivot. A NEW payment on the SAME order, a different error,
+    # and the agent switches tools — retry -> payment link — and executes it.
+    assert follow_up["failure_type"] == "insufficient_funds"
+    assert follow_up["order_id"] == original["order_id"]
+    assert follow_up["tool"] == "generate_payment_link"
+    assert follow_up["confidence"] == 70
+    assert follow_up["gate_action"] == "auto_execute_flagged"
+    assert follow_up["requires_human"] is False
+    assert follow_up["executed"] is True
+
+    cascade_step = body["steps"][2]
+    assert cascade_step["order_id"] == original["order_id"]
+    assert cascade_step["original_error"] == "issuer_bank_down"
+    assert cascade_step["new_error"] == "insufficient_funds"
+    assert cascade_step["tool"] == "generate_payment_link"
+    assert cascade_step["executed"] is True
+
+    # Beat 4: the customer pays. CB-001 trips, both rows resolve — and only
+    # the original carries the recovered amount, because one capture is one
+    # payment no matter how many attempts failed along the way.
+    assert body["steps"][3]["event_type"] == "payment.captured"
+    assert {t["breaker_id"] for t in body["breakers_tripped"]} == {"CB-001"}
+    assert original["recovery_status"] == "recovered"
+    assert follow_up["recovery_status"] == "recovered"
+    assert original["recovered_amount"] == 250_000
+    assert follow_up["recovered_amount"] == 0
+    assert body["metrics"]["recovered_amount_paise"] == 250_000
+
+
+def test_cascade_pivot_is_deterministic_for_the_pinned_customer():
+    """Guards the routing assumption the cascade preset's story is built on.
+
+    The preset pins its customer because the enricher derives history from
+    identity — so the history (and therefore the gate's routing) is fixed for
+    that identity. If the enricher's formula ever changes and the pinned
+    identity's history moves, the pivot may leave the auto-execute band and
+    the demo beat silently breaks. This sweeps every hour/day boundary and
+    fails loudly instead: retune the identity in ``app/chaos.py`` (see the
+    comment there) until this passes again.
+    """
+    from app.agent import confidence
+    from app.diagnosis import classifier, enricher
+    from app.strategy import planner
+
+    identity = {
+        "customer_name": "Neha Chopra",
+        "customer_email": "neha.chopra@example.com",
+        "customer_contact": "+919876543210",
+    }
+    event = {
+        "razorpay_payment_id": "pay_cascade_guard",
+        "razorpay_order_id": "order_cascade_guard",
+        "amount": 250_000,  # the preset's pinned Rs 2,500
+        "amount_inr": 2500.0,
+        "currency": "INR",
+        "payment_method": "card",
+        "error_code": "BAD_REQUEST_ERROR",
+        "error_source": "customer",
+        "error_step": "payment_authorization",
+        "error_reason": "insufficient_funds",
+        "error_description": "d",
+        **identity,
+        "customer_dnd": False,
+    }
+
+    # The history MUST be strong — the whole pivot rides on it clearing the
+    # 70-point auto-execute band for a hard failure.
+    history = enricher.synthesize_customer_history(event)
+    assert history["success_rate"] > 0.80, (
+        f"The pinned cascade customer's history weakened to "
+        f"{history['success_rate']:.0%}; retune the identity in app/chaos.py"
+    )
+
+    for day in (1, 24, 25, 31):
+        for hour in (0, 5, 6, 11, 20, 22, 23):
+            current_time = {
+                "iso": datetime(2026, 1, day, hour, tzinfo=timezone(timedelta(hours=5, minutes=30))).isoformat(),
+                "hour": hour,
+                "day_of_month": day,
+                "is_night": hour >= 22 or hour < 6,
+                "age_days": 0.0,
+            }
+            enriched = {
+                "event": event,
+                "customer_history": history,
+                "bank_status": enricher.bank_status(event),
+                "current_time": current_time,
+                "prior_attempts": 1,  # the fired retry: attempt 1
+            }
+            diagnosis = classifier.diagnose(enriched)
+            tool, _args, meta = planner.plan(
+                {
+                    "diagnostic": diagnosis,
+                    "event": {**event, "failure_label": diagnosis["failure_label"]},
+                    "customer_history": history,
+                    "prior_attempts": 1,
+                    "current_time": current_time,
+                }
+            )
+            gate = confidence.evaluate(meta["confidence"], 250_000)
+            assert tool == "generate_payment_link", f"day={day} hour={hour} tool={tool}"
+            assert gate.auto, f"day={day} hour={hour} routed {gate.action} (confidence {meta['confidence']})"
 
 
 async def test_chaos_hdfc_bank_crash(client):

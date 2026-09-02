@@ -37,8 +37,8 @@ CHAOS_PRESETS: dict[str, dict[str, Any]] = {
         "description": "5 payments queued during HDFC downtime, watch retry-on-recovery",
         "narrative": (
             "Five card payments fail against a down issuer. Every one is classified "
-            "soft, auto-approved, and given a scheduled retry rather than a message — "
-            "nobody gets nagged for the bank's outage. The clock jumps forward, the "
+            "soft, auto-approved, and given a scheduled retry rather than a message, "
+            "so nobody gets nagged for the bank's outage. The clock jumps forward, the "
             "retries fire, and when three customers pay CB-001 cancels the remaining "
             "work on those orders instantly."
         ),
@@ -71,7 +71,7 @@ CHAOS_PRESETS: dict[str, dict[str, Any]] = {
         "narrative": (
             "Three recoveries are mid-flight with retries on the schedule when the "
             "chargebacks land. CB-002 trips on each one and cancels every pending "
-            "action — chasing a customer who has already disputed is how a merchant "
+            "action, because chasing a customer who has already disputed is how a merchant "
             "loses the representment. The audit trail records the trip and the count "
             "of actions it killed."
         ),
@@ -85,7 +85,7 @@ CHAOS_PRESETS: dict[str, dict[str, Any]] = {
         "name": "📱 UPI Timeout Wave",
         "description": "8 UPI PSP timeouts, retries time-shifted out of peak hours",
         "narrative": (
-            "Eight UPI payments time out at the PSP. Nothing fires immediately — the "
+            "Eight UPI payments time out at the PSP. Nothing fires immediately: the "
             "compliance engine shifts every retry out of NPCI peak hours and every "
             "notification into the TRAI 09:00-20:00 window, so the schedule fills up "
             "with work that is legal by construction. Watch the compliance band, not "
@@ -119,13 +119,31 @@ CHAOS_PRESETS: dict[str, dict[str, Any]] = {
             "abandons retrying for a payment link. The customer pays via UPI two days "
             "later. This is the agent adapting rather than repeating."
         ),
-        # Deferred to phase 5c: a retry that fails with a *new* error is the one
-        # preset that needs backend behaviour rather than composition. Shipped as
-        # unavailable so the dashboard can render it disabled from the registry and
-        # enabling it later is a one-line change with no frontend edit.
-        "available": False,
-        "unavailable_reason": "Cascade mode arrives with phase 5c — needs a retry that fails with a new error, which is new backend behaviour rather than a composition of existing endpoints.",
-        "steps": [],
+        # The customer is pinned, not random: the mock enricher derives synthetic
+        # history from identity, so a pinned identity pins the confidence the gate
+        # reads. Neha Chopra's history is 98% success, which lands the follow-up
+        # insufficient-funds pivot at exactly 70 (moderate) — auto-execute, flagged —
+        # for every run, at any hour. Retune the identity if the enricher formula
+        # changes; the guard test will fail loudly if you don't.
+        "available": True,
+        "steps": [
+            {
+                "op": "inject",
+                "failure_type": "bank_downtime",
+                "amount": _DETERMINISTIC_AUTO,
+                "method": "card",
+                "count": 1,
+                "customer": {
+                    "name": "Neha Chopra",
+                    "email": "neha.chopra@example.com",
+                    "contact": "+919876543210",
+                },
+            },
+            # Past the next 06:30 IST retry slot from any hour the preset runs.
+            {"op": "fast_forward", "hours": 36},
+            {"op": "cascade_fail", "failure_type": "insufficient_funds"},
+            {"op": "circuit", "event_type": "payment.captured", "target": "first", "n": 1},
+        ],
     },
 }
 

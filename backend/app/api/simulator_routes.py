@@ -15,12 +15,15 @@ keeps the demo evidence rather than theatre.
   landed, someone opted out) so a circuit breaker can be shown tripping without
   hand-crafting a webhook payload.
 * ``POST /chaos/{preset}`` runs a scripted scenario from ``app.chaos`` — a short
-  sequence of exactly those three verbs — so a whole story is one click.
+  sequence of those verbs — so a whole story is one click.
 * ``POST /run-batch`` injects volume and returns an *aggregate*, not 100 event
   payloads. The aggregation is the reason it exists separately from ``/inject``.
 
-Cascade mode is the one preset that needs new behaviour rather than composition
-and is registered unavailable until it lands.
+The one verb that is *not* pure composition is ``cascade_fail`` (phase 5c): it
+continues an existing order's story with a new failed attempt carrying a
+different error — the webhook Razorpay would have sent when a retried payment
+fails again — so the agent genuinely re-diagnoses and pivots. See
+:func:`_inject_cascade_failure`.
 """
 from __future__ import annotations
 
@@ -129,7 +132,18 @@ def _make_failure_entity(
     failure_type: str | None = None,
     amount: int | None = None,
     method: str | None = None,
+    *,
+    order_id: str | None = None,
+    customer: dict | None = None,
 ) -> tuple[dict, str]:
+    """Mint one synthetic Razorpay payment entity.
+
+    ``order_id`` reuses an existing order (the cascade follow-up attempt — a
+    *new* payment id against the *same* order, exactly as Razorpay reports a
+    retried payment that failed again). ``customer`` pins the identity instead
+    of inventing one, so a preset can guarantee the deterministic history the
+    confidence gate will read.
+    """
     if failure_type not in FAILURE_PROFILES:
         types = list(FAILURE_PROFILES)
         weights = [FAILURE_PROFILES[t]["weight"] for t in types]
@@ -144,10 +158,14 @@ def _make_failure_entity(
     name = f"{first} {last}"
     email = f"{first.lower()}.{last.lower()}@example.com"
     contact = f"+9198{random.randint(10000000, 99999999)}"
+    if customer:
+        name = customer.get("name") or name
+        email = customer.get("email") or email
+        contact = customer.get("contact") or contact
 
     entity = {
         "id": f"pay_sim_{secrets.token_hex(7)}",
-        "order_id": f"order_sim_{secrets.token_hex(7)}",
+        "order_id": order_id or f"order_sim_{secrets.token_hex(7)}",
         "amount": amount,
         "currency": "INR",
         "status": "failed",
@@ -180,6 +198,7 @@ async def _inject_one(
     diagnose: bool,
     recover: bool,
     execute: bool,
+    customer: dict | None = None,
 ) -> tuple[RecoveryEvent, dict]:
     """Mint one synthetic failure, ingest it, and run the full agent pipeline.
 
@@ -187,7 +206,7 @@ async def _inject_one(
     running (a preset with steps after the injection) need the object, because the
     row keeps changing underneath the payload.
     """
-    entity, ftype = _make_failure_entity(failure_type, amount, method)
+    entity, ftype = _make_failure_entity(failure_type, amount, method, customer=customer)
     event, _created = await ingest_failure(session, entity, is_simulated=True)
     await sse_manager.broadcast(
         {"type": "failure_detected", "event": {**event_to_dict(event), "failure_type": ftype}}
@@ -196,6 +215,60 @@ async def _inject_one(
     # Everything past ingestion is the shared pipeline — the same code a real
     # payment.failed webhook runs. ``failure_type`` rides along in ``extra``
     # because it is a simulator concept the pipeline knows nothing about.
+    payload = await run_pipeline(
+        session,
+        event,
+        diagnose=diagnose,
+        recover=recover,
+        execute=execute,
+        extra={"failure_type": ftype},
+    )
+    return event, payload
+
+
+async def _inject_cascade_failure(
+    session: AsyncSession,
+    original: RecoveryEvent,
+    *,
+    failure_type: str,
+    diagnose: bool,
+    recover: bool,
+    execute: bool,
+) -> tuple[RecoveryEvent, dict]:
+    """The one simulator behaviour that is *not* a composition of endpoints.
+
+    When a scheduled retry fires, Razorpay answers with a new webhook: either
+    ``payment.captured``, or another ``payment.failed`` — a NEW payment id on the
+    SAME order, possibly with a different error. This mints that follow-up
+    failure (same order, same customer, new error), links it to the original
+    case via ``cascade_group_id``, and runs the real pipeline on it. The agent
+    then re-diagnoses (soft -> hard) and pivots (retry -> payment link) live —
+    no shortcut, no manufactured outcome the pipeline could not have produced
+    from the same webhook.
+    """
+    entity, ftype = _make_failure_entity(
+        failure_type,
+        amount=original.amount,
+        method=original.payment_method,
+        order_id=original.razorpay_order_id,
+        customer={
+            "name": original.customer_name,
+            "email": original.customer_email,
+            "contact": original.customer_contact,
+        },
+    )
+    event, _created = await ingest_failure(
+        session, entity, is_simulated=True, cascade_group_id=str(original.id)
+    )
+    # The retry that fired was attempt 1; this failure IS attempt 2. The count
+    # is display + diagnosis context (the classifier only penalises at >= 2),
+    # so the pivot is driven by the new error, not by the attempt counter.
+    event.recovery_attempts = max(1, original.recovery_attempts or 0)
+    await session.commit()
+
+    await sse_manager.broadcast(
+        {"type": "failure_detected", "event": {**event_to_dict(event), "failure_type": ftype}}
+    )
     payload = await run_pipeline(
         session,
         event,
@@ -476,6 +549,7 @@ async def run_chaos_preset(
                         diagnose=body.diagnose,
                         recover=body.recover,
                         execute=body.execute,
+                        customer=step.get("customer"),
                     )
                 )
             steps_run.append(
@@ -485,6 +559,7 @@ async def run_chaos_preset(
                     "amount": step.get("amount"),
                     "method": step.get("method"),
                     "count": count,
+                    "customer_pinned": bool(step.get("customer")),
                 }
             )
 
@@ -501,6 +576,40 @@ async def run_chaos_preset(
                     "processed": len(actions),
                     "fired": step_fired,
                     "cancelled": sum(1 for a in actions if a.get("breaker_id")),
+                }
+            )
+
+        elif op == "cascade_fail":
+            # The retry's outcome: a new failed attempt on the first order this
+            # run created, carrying a *different* error. Scoped to this run's
+            # events like every other op — a preset never touches a bystander.
+            if not injected:
+                raise HTTPException(
+                    status_code=500,
+                    detail="cascade_fail needs an injected event to continue; the preset script is malformed",
+                )
+            original, _payload = injected[0]
+            cascade_event, cascade_payload = await _inject_cascade_failure(
+                session,
+                original,
+                failure_type=step["failure_type"],
+                diagnose=body.diagnose,
+                recover=body.recover,
+                execute=body.execute,
+            )
+            # Counted and receipted like any injected failure — it IS one.
+            injected.append((cascade_event, cascade_payload))
+            cascade_recovery = cascade_payload.get("recovery") or {}
+            steps_run.append(
+                {
+                    "op": "cascade_fail",
+                    "order_id": original.razorpay_order_id,
+                    "original_error": original.error_reason,
+                    "new_error": cascade_event.error_reason,
+                    "cascade_event_id": str(cascade_event.id),
+                    "tool": cascade_recovery.get("tool"),
+                    "gate_action": cascade_recovery.get("gate_action"),
+                    "executed": bool(cascade_recovery.get("executed")),
                 }
             )
 
